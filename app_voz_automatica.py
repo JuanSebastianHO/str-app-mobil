@@ -193,7 +193,7 @@ if st.session_state.seccion_actual == "Inicio":
                     "tabla": "ventas" | "compras" | "productos",
                     "criterio_busqueda": {
                         "nombre": "nombre del producto o null",
-                        "codigo": "codigo"
+                        "codigo": codigo
                     },
                     "datos_a_actualizar": {
                         "nombre": "nuevo nombre del producto o null",
