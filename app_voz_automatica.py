@@ -12,7 +12,37 @@ st.set_page_config(
     page_title="Registro por Voz - Finanzas", page_icon="🎙️", layout="centered"
 )
 
+# Ventana emergente global optimizada para soportar cualquier tabla del sistema
+@st.dialog("📋 Consulta Rápida de Datos")
+def modal_consulta_global(tabla_nombre):
+    try:
+        tabla_real = tabla_nombre.lower()
+        
+        res = supabase.table(tabla_real).select("*").range(0, 9999).execute()
+        df = pd.DataFrame(res.data)
+        if not df.empty:
+            df.columns = df.columns.str.lower()
+            
+            if "precio" in df.columns:
+                df["precio"] = pd.to_numeric(df["precio"], errors="coerce").fillna(0)
+                if "cantidad" in df.columns:
+                    df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
+                    df["subtotal"] = df["cantidad"] * df["precio"]
+                    df["subtotal"] = df["subtotal"].apply(lambda x: f"${x:,.2f}")
+                df["precio"] = df["precio"].apply(lambda x: f"${x:,.2f}")
+            elif "monto" in df.columns:
+                df["monto"] = pd.to_numeric(df["monto"], errors="coerce").fillna(0)
+                df["monto"] = df["monto"].apply(lambda x: f"${x:,.2f}")
+            elif "precio venta" in df.columns:
+                df["precio venta"] = pd.to_numeric(df["precio venta"], errors="coerce").fillna(0)
+                df["precio venta"] = df["precio venta"].apply(lambda x: f"${x:,.2f}")
 
+            st.markdown(f"**Mostrando registros de: `{tabla_real.upper()}`**")
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.info(f"No hay registros en la tabla '{tabla_real}'.")
+    except Exception as e:
+        st.error(f"Error al cargar la tabla: {e}")
 
 # Inicializar estados de navegación y datos
 if "seccion_actual" not in st.session_state:
@@ -28,10 +58,8 @@ if "audio_key" not in st.session_state:
 # VISTA: INICIO (Menú Principal)
 # ==========================================
 if st.session_state.seccion_actual == "Inicio":
-    # Estilos CSS personalizados para compactar el componente de audio
     st.markdown("""
         <style>
-            /* Reducir y centrar el contenedor del grabador de audio */
             div[data-testid="stAudioInput"] {
                 display: flex;
                 justify-content: center;
@@ -54,7 +82,6 @@ if st.session_state.seccion_actual == "Inicio":
     
     st.markdown("---")
     
-    # Micrófono compacto
     audio_file = st.audio_input("Graba tu transacción:", key=f"audio_{st.session_state.audio_key}")
 
     if audio_file is not None:
@@ -160,7 +187,7 @@ if st.session_state.seccion_actual == "Inicio":
                     "tabla": "ventas" | "compras" | "productos",
                     "criterio_busqueda": {
                         "nombre": "nombre del producto o null",
-                        "id": "uuid del registro o null"
+                        "codigo": "codigo"
                     },
                     "datos_a_actualizar": {
                         "nombre": "nuevo nombre del producto o null",
@@ -252,13 +279,13 @@ if st.session_state.seccion_actual == "Inicio":
                 temperature=0.0,
             )
 
-            contenido_crudo = chat_completion.choices[0].message.content
-            resultado_cargado = json.loads(contenido_crudo)
+        contenido_crudo = chat_completion.choices[0].message.content
+        resultado_cargado = json.loads(contenido_crudo)
 
-            if isinstance(resultado_cargado, dict) and "acciones" in resultado_cargado:
-                resultado_json = resultado_cargado["acciones"]
-            else:
-                resultado_json = resultado_cargado
+        if isinstance(resultado_cargado, dict) and "acciones" in resultado_cargado:
+            resultado_json = resultado_cargado["acciones"]
+        else:
+            resultado_json = resultado_cargado
 
         st.session_state.resultado_activo = resultado_json
         st.session_state.audio_key += 1
@@ -269,6 +296,12 @@ if st.session_state.seccion_actual == "Inicio":
         resultados = st.session_state.resultado_activo
         if not isinstance(resultados, list):
             resultados = [resultados]
+            
+        for r in resultados:
+            if r.get("accion") == "CONSULTAR":
+                tabla_consulta = r.get("tabla") if r.get("tabla") else "ventas"
+                st.session_state.resultado_activo = None
+                modal_consulta_global(tabla_consulta)
 
         for i, resultado_json in enumerate(resultados):
             st.markdown(f"--- \n### 🔄 Acción {i + 1}")
@@ -283,7 +316,6 @@ if st.session_state.seccion_actual == "Inicio":
                     if not tabla:
                         continue
 
-                    # Función interna para normalizar el nombre del producto de forma inteligente
                     def normalizar_nombre_producto(nombre_crudo):
                         if not nombre_crudo:
                             return nombre_crudo
@@ -307,23 +339,19 @@ if st.session_state.seccion_actual == "Inicio":
                                 if k.upper() not in ["ACCION", "TABLA"] and v is not None
                             }
                             
-                            # Validación obligatoria de la forma de pago para tablas que lo requieren
                             if tabla in ["ventas", "compras", "gastos", "abonos", "pagos_proveedores"]:
                                 forma_pago = datos_insertar.get("FORMA DE PAGO")
                                 if not forma_pago or str(forma_pago).lower() == "null" or str(forma_pago).strip() == "":
-                                    st.warning(f"⚠️ Acción {i+1}: ¡Es obligatorio indicar la forma de pago (efectivo, nequi, transferencia, etc.)!")
+                                    st.warning(f"⚠️ Acción {i+1}: ¡Es obligatorio indicar la forma de pago!")
                                     continue
 
-                            # Normalizar el nombre PRIMERO para que coincida con el catálogo oficial
                             if tabla in ["compras", "ventas", "productos"] and "NOMBRE" in datos_insertar:
                                 datos_insertar["NOMBRE"] = normalizar_nombre_producto(datos_insertar["NOMBRE"])
 
                             nombre_prod = datos_insertar.get("NOMBRE")
                             
-                            # Si no se dictó el precio, buscar usando el nombre ya normalizado
                             if nombre_prod and (tabla in ["ventas", "compras"]) and ("PRECIO" not in datos_insertar or not datos_insertar["PRECIO"] or datos_insertar["PRECIO"] == 0):
                                 precio_encontrado = 0
-                                
                                 res_prod_precio = supabase.table("productos").select("*").ilike("NOMBRE", nombre_prod).execute()
                                 if res_prod_precio.data and len(res_prod_precio.data) > 0:
                                     prod_info = res_prod_precio.data[0]
@@ -340,16 +368,11 @@ if st.session_state.seccion_actual == "Inicio":
                                 if precio_encontrado and precio_encontrado > 0:
                                     datos_insertar["PRECIO"] = precio_encontrado
                                 else:
-                                    st.warning(f"⚠️ Acción {i+1}: No se encontró un precio registrado para '{nombre_prod}'. Se asignará 0.")
                                     datos_insertar["PRECIO"] = 0
 
-                            # Guardar la transacción original en su tabla correspondiente
                             supabase.table(tabla).insert(datos_insertar).execute()
                             st.success(f"¡Registro {i+1} guardado con éxito en '{tabla}'!")
 
-                            # -------------------------------------------------------------
-                            # INTEGRACIÓN AUTOMÁTICA CON EL MÓDULO DE INVENTARIOS (PRODUCTOS)
-                            # -------------------------------------------------------------
                             cantidad_movida = int(datos_insertar.get("CANTIDAD", 0))
 
                             if nombre_prod and cantidad_movida > 0:
@@ -361,7 +384,6 @@ if st.session_state.seccion_actual == "Inicio":
                                         key_stock = "STOCK ACTUAL"
                                         stock_actual = int(prod_existente.get(key_stock, 0))
                                         nuevo_stock = stock_actual + cantidad_movida
-
                                         codigo_val = prod_existente.get("CODIGO")
                                         supabase.table("productos").update({key_stock: nuevo_stock}).eq("CODIGO", codigo_val).execute()
                                     else:
@@ -382,7 +404,6 @@ if st.session_state.seccion_actual == "Inicio":
                                         key_stock = "STOCK ACTUAL"
                                         stock_actual = int(prod_existente.get(key_stock, 0))
                                         nuevo_stock = max(0, stock_actual - cantidad_movida)
-
                                         codigo_val = prod_existente.get("CODIGO")
                                         supabase.table("productos").update({key_stock: nuevo_stock}).eq("CODIGO", codigo_val).execute()
 
@@ -451,14 +472,11 @@ if st.session_state.seccion_actual == "Inicio":
     st.markdown("---")
     st.markdown("### Menú Principal")
 
-    # Estilos CSS modernos para transformar los botones en tarjetas táctiles estilo app móvil cafetera
     st.markdown("""
         <style>
-            /* Contenedor general para dar espacio y evitar toques accidentales */
             .stButton {
                 margin-bottom: 12px;
             }
-            /* Estilo personalizado para los botones grandes de navegación */
             div.stButton > button {
                 width: 100% !important;
                 height: 95px !important;
@@ -487,7 +505,6 @@ if st.session_state.seccion_actual == "Inicio":
         </style>
     """, unsafe_allow_html=True)
     
-    # 5 botones grandes distribuidos en columnas para una experiencia táctil móvil óptima
     col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(5)
     
     with col_b1:
@@ -529,32 +546,31 @@ else:
 
         sub_opcion = st.radio(
             "Selecciona qué deseas consultar o registrar:",
-            ["Registro diario de ventas", "Registro de abonos de clientes", "Reporte de ingresos (Diario, Semanal, Mensual)"],
+            ["Registro diario de ventas", "Registro de abonos de clientes", "Reporte de ingresos (Diario, Semanal, Mensual)", "Histórico general de ingresos"],
             horizontal=True
         )
 
         if sub_opcion == "Registro diario de ventas":
             st.subheader("📋 Registro Diario de Ventas")
             try:
-                res = supabase.table("ventas").select("*").range(0, 9999).execute()
+                res = supabase.table("ventas").select("*").order("CODIGO", desc=False).range(0, 9999).execute()
                 df = pd.DataFrame(res.data)
                 if not df.empty:
                     df.columns = df.columns.str.lower()
                     if "fecha" in df.columns:
-                        df["fecha_dt"] = pd.to_datetime(df["fecha"], errors="coerce").dt.tz_localize(None)
+                        df["fecha_limpia"] = df["fecha"].astype(str).str.slice(0, 19)
+                        df["fecha_dt"] = pd.to_datetime(df["fecha_limpia"], errors="coerce").dt.tz_localize(None)
                         hoy = pd.Timestamp.now().date()
                         df = df[df["fecha_dt"].dt.date == hoy]
-                        df = df.drop(columns=["fecha_dt"])
+                        df = df.drop(columns=["fecha_dt", "fecha_limpia"], errors="ignore")
 
                     if not df.empty:
                         if "cantidad" in df.columns and "precio" in df.columns:
                             df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
                             df["precio"] = pd.to_numeric(df["precio"], errors="coerce").fillna(0)
                             df["subtotal"] = df["cantidad"] * df["precio"]
-                            
                             df["precio"] = df["precio"].apply(lambda x: f"${x:,.2f}")
                             df["subtotal"] = df["subtotal"].apply(lambda x: f"${x:,.2f}")
-
                         st.dataframe(df, use_container_width=True)
                     else:
                         st.info("No hay ventas registradas para el día de hoy.")
@@ -584,12 +600,13 @@ else:
             tipo_reporte = st.selectbox("Selecciona el periodo del reporte:", ["Diario", "Semanal", "Mensual"])
             
             try:
-                res = supabase.table("ventas").select("*").range(0, 9999).execute()
+                res = supabase.table("ventas").select("*").order("CODIGO", desc=False).range(0, 9999).execute()
                 df = pd.DataFrame(res.data)
                 if not df.empty:
                     df.columns = df.columns.str.lower()
                     if "fecha" in df.columns:
-                        df["fecha_dt"] = pd.to_datetime(df["fecha"], errors="coerce").dt.tz_localize(None)
+                        df["fecha_limpia"] = df["fecha"].astype(str).str.slice(0, 19)
+                        df["fecha_dt"] = pd.to_datetime(df["fecha_limpia"], errors="coerce").dt.tz_localize(None)
                         ahora = pd.Timestamp.now()
 
                         if tipo_reporte == "Diario":
@@ -602,14 +619,13 @@ else:
                         elif tipo_reporte == "Mensual":
                             df = df[(df["fecha_dt"].dt.year == ahora.year) & (df["fecha_dt"].dt.month == ahora.month)]
 
-                        df = df.drop(columns=["fecha_dt"])
+                        df = df.drop(columns=["fecha_dt", "fecha_limpia"], errors="ignore")
 
                     if not df.empty:
                         if "cantidad" in df.columns and "precio" in df.columns:
                             df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
                             df["precio"] = pd.to_numeric(df["precio"], errors="coerce").fillna(0)
                             total_ingresos = (df["cantidad"] * df["precio"]).sum()
-                            
                             df["subtotal"] = df["cantidad"] * df["precio"]
                             df["precio"] = df["precio"].apply(lambda x: f"${x:,.2f}")
                             df["subtotal"] = df["subtotal"].apply(lambda x: f"${x:,.2f}")
@@ -629,6 +645,28 @@ else:
             except Exception as e:
                 st.error(f"Error al generar reporte: {e}")
 
+        elif sub_opcion == "Histórico general de ingresos":
+            st.subheader("📚 Histórico General de Ingresos")
+            try:
+                res = supabase.table("ventas").select("*").order("CODIGO", desc=False).range(0, 9999).execute()
+                df = pd.DataFrame(res.data)
+                if not df.empty:
+                    df.columns = df.columns.str.lower()
+                    if "cantidad" in df.columns and "precio" in df.columns:
+                        df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
+                        df["precio"] = pd.to_numeric(df["precio"], errors="coerce").fillna(0)
+                        total_general = (df["cantidad"] * df["precio"]).sum()
+                        df["subtotal"] = df["cantidad"] * df["precio"]
+                        df["precio"] = df["precio"].apply(lambda x: f"${x:,.2f}")
+                        df["subtotal"] = df["subtotal"].apply(lambda x: f"${x:,.2f}")
+                        
+                        st.metric("💰 Total Histórico de Ingresos", f"${total_general:,.2f}")
+                        st.dataframe(df, use_container_width=True)
+                else:
+                    st.info("No hay ingresos registrados en el sistema.")
+            except Exception as e:
+                st.error(f"Error al cargar el histórico: {e}")
+
     elif seccion == "Compras":
         st.title("🛒 Sección: Compras")
         st.markdown("Las compras son todas las adquisiciones de bienes o servicios realizadas para la actividad del negocio.")
@@ -643,22 +681,22 @@ else:
         if sub_opcion == "Registro diario de compras":
             st.subheader("📋 Registro Diario de Compras")
             try:
-                res = supabase.table("compras").select("*").range(0, 9999).execute()
+                res = supabase.table("compras").select("*").order("CODIGO", desc=False).range(0, 9999).execute()
                 df = pd.DataFrame(res.data)
                 if not df.empty:
                     df.columns = df.columns.str.lower()
                     if "fecha" in df.columns:
-                        df["fecha_dt"] = pd.to_datetime(df["fecha"], errors="coerce").dt.tz_localize(None)
+                        df["fecha_limpia"] = df["fecha"].astype(str).str.slice(0, 19)
+                        df["fecha_dt"] = pd.to_datetime(df["fecha_limpia"], errors="coerce").dt.tz_localize(None)
                         hoy = pd.Timestamp.now().date()
                         df = df[df["fecha_dt"].dt.date == hoy]
-                        df = df.drop(columns=["fecha_dt"])
+                        df = df.drop(columns=["fecha_dt", "fecha_limpia"], errors="ignore")
 
                     if not df.empty:
                         if "cantidad" in df.columns and "precio" in df.columns:
                             df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
                             df["precio"] = pd.to_numeric(df["precio"], errors="coerce").fillna(0)
                             df["subtotal"] = df["cantidad"] * df["precio"]
-                            
                             df["precio"] = df["precio"].apply(lambda x: f"${x:,.2f}")
                             df["subtotal"] = df["subtotal"].apply(lambda x: f"${x:,.2f}")
 
@@ -691,12 +729,13 @@ else:
             tipo_reporte = st.selectbox("Selecciona el periodo del reporte:", ["Diario", "Semanal", "Mensual"], key="reporte_compras_select")
             
             try:
-                res = supabase.table("compras").select("*").range(0, 9999).execute()
+                res = supabase.table("compras").select("*").order("CODIGO", desc=False).range(0, 9999).execute()
                 df = pd.DataFrame(res.data)
                 if not df.empty:
                     df.columns = df.columns.str.lower()
                     if "fecha" in df.columns:
-                        df["fecha_dt"] = pd.to_datetime(df["fecha"], errors="coerce").dt.tz_localize(None)
+                        df["fecha_limpia"] = df["fecha"].astype(str).str.slice(0, 19)
+                        df["fecha_dt"] = pd.to_datetime(df["fecha_limpia"], errors="coerce").dt.tz_localize(None)
                         ahora = pd.Timestamp.now()
 
                         if tipo_reporte == "Diario":
@@ -709,7 +748,7 @@ else:
                         elif tipo_reporte == "Mensual":
                             df = df[(df["fecha_dt"].dt.year == ahora.year) & (df["fecha_dt"].dt.month == ahora.month)]
 
-                        df = df.drop(columns=["fecha_dt"])
+                        df = df.drop(columns=["fecha_dt", "fecha_limpia"], errors="ignore")
 
                     if not df.empty:
                         if "cantidad" in df.columns and "precio" in df.columns:
@@ -751,15 +790,16 @@ else:
         if sub_opcion == "Registro diario de gastos":
             st.subheader("📋 Registro Diario de Gastos")
             try:
-                res = supabase.table("gastos").select("*").range(0, 9999).execute()
+                res = supabase.table("gastos").select("*").order("CODIGO", desc=False).range(0, 9999).execute()
                 df = pd.DataFrame(res.data)
                 if not df.empty:
                     df.columns = df.columns.str.lower()
                     if "fecha" in df.columns:
-                        df["fecha_dt"] = pd.to_datetime(df["fecha"], errors="coerce").dt.tz_localize(None)
+                        df["fecha_limpia"] = df["fecha"].astype(str).str.slice(0, 19)
+                        df["fecha_dt"] = pd.to_datetime(df["fecha_limpia"], errors="coerce").dt.tz_localize(None)
                         hoy = pd.Timestamp.now().date()
                         df = df[df["fecha_dt"].dt.date == hoy]
-                        df = df.drop(columns=["fecha_dt"])
+                        df = df.drop(columns=["fecha_dt", "fecha_limpia"], errors="ignore")
 
                     if not df.empty:
                         if "precio" in df.columns:
@@ -794,12 +834,13 @@ else:
             tipo_reporte = st.selectbox("Selecciona el periodo del reporte:", ["Diario", "Semanal", "Mensual"], key="reporte_gastos_select")
             
             try:
-                res = supabase.table("gastos").select("*").range(0, 9999).execute()
+                res = supabase.table("gastos").select("*").order("CODIGO", desc=False).range(0, 9999).execute()
                 df = pd.DataFrame(res.data)
                 if not df.empty:
                     df.columns = df.columns.str.lower()
                     if "fecha" in df.columns:
-                        df["fecha_dt"] = pd.to_datetime(df["fecha"], errors="coerce").dt.tz_localize(None)
+                        df["fecha_limpia"] = df["fecha"].astype(str).str.slice(0, 19)
+                        df["fecha_dt"] = pd.to_datetime(df["fecha_limpia"], errors="coerce").dt.tz_localize(None)
                         ahora = pd.Timestamp.now()
 
                         if tipo_reporte == "Diario":
@@ -812,7 +853,7 @@ else:
                         elif tipo_reporte == "Mensual":
                             df = df[(df["fecha_dt"].dt.year == ahora.year) & (df["fecha_dt"].dt.month == ahora.month)]
 
-                        df = df.drop(columns=["fecha_dt"])
+                        df = df.drop(columns=["fecha_dt", "fecha_limpia"], errors="ignore")
 
                     if not df.empty:
                         if "precio" in df.columns:
@@ -909,8 +950,12 @@ else:
         def filtrar_por_periodo(df_in, col_fecha="fecha"):
             if df_in.empty or col_fecha not in df_in.columns:
                 return df_in
+            if periodo_filtro == "Histórico General":
+                return df_in
+                
             df_copia = df_in.copy()
-            df_copia["_dt"] = pd.to_datetime(df_copia[col_fecha], errors="coerce").dt.tz_localize(None)
+            df_copia["_fecha_limpia"] = df_copia[col_fecha].astype(str).str.slice(0, 19)
+            df_copia["_dt"] = pd.to_datetime(df_copia["_fecha_limpia"], errors="coerce").dt.tz_localize(None)
             ahora = pd.Timestamp.now()
             
             if periodo_filtro == "Diario":
@@ -922,7 +967,7 @@ else:
             elif periodo_filtro == "Mensual":
                 df_copia = df_copia[(df_copia["_dt"].dt.year == ahora.year) & (df_copia["_dt"].dt.month == ahora.month)]
             
-            return df_copia.drop(columns=["_dt"], errors="ignore")
+            return df_copia.drop(columns=["_dt", "_fecha_limpia"], errors="ignore")
 
         try:
             # -----------------------------------------------------------------
@@ -932,9 +977,9 @@ else:
                 st.subheader("💵 Reporte de Flujo de Caja")
                 st.markdown("Muestra el dinero efectivo que entra y sale del negocio.")
 
-                res_v = supabase.table("ventas").select("*").range(0, 9999).execute()
-                res_c = supabase.table("compras").select("*").range(0, 9999).execute()
-                res_g = supabase.table("gastos").select("*").range(0, 9999).execute()
+                res_v = supabase.table("ventas").select("*").order("CODIGO", desc=False).range(0, 9999).execute()
+                res_c = supabase.table("compras").select("*").order("CODIGO", desc=False).range(0, 9999).execute()
+                res_g = supabase.table("gastos").select("*").order("CODIGO", desc=False).range(0, 9999).execute()
 
                 df_v = filtrar_por_periodo(pd.DataFrame(res_v.data))
                 df_c = filtrar_por_periodo(pd.DataFrame(res_c.data))
