@@ -9,7 +9,7 @@ supabase = supabase_config()
 groq_client = Groq(api_key=st.secrets["groq"]["API_KEY"], max_retries=2)
 
 st.set_page_config(
-    page_title="Registro por Voz - Finanzas", page_icon="🎙️", layout="centered"
+    page_title="GICI - Registro Financiero por Voz", page_icon="🎙️", layout="centered"
 )
 
 # Ventana emergente global optimizada para soportar cualquier tabla del sistema
@@ -77,8 +77,14 @@ if st.session_state.seccion_actual == "Inicio":
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("🎙️ Registro Financiero por Voz")
-    st.markdown("<p style='text-align: center;'>Toca el micrófono para registrar o consultar tus finanzas.</p>", unsafe_allow_html=True)
+    col_logo, col_titulo = st.columns([1, 4], vertical_alignment="center")
+    with col_logo:
+        st.image("logo.png", width=110)
+    with col_titulo:
+        st.markdown("<h1 style='margin: 0;'>GICI</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='font-size: 18px; color: #888; margin: 0;'>Registro Financiero por Voz</p>", unsafe_allow_html=True)
+
+    st.markdown("<p style='text-align: center; margin-top: 20px;'>Toca el micrófono para registrar o consultar tus finanzas.</p>", unsafe_allow_html=True)
     
     st.markdown("---")
     
@@ -947,7 +953,7 @@ else:
 
         periodo_filtro = st.radio("Periodo de análisis:", ["Diario", "Semanal", "Mensual", "Histórico General"], horizontal=True)
 
-        def filtrar_por_periodo(df_in, col_fecha="fecha"):
+        def filtrar_por_periodo(df_in, col_fecha="FECHA"):
             if df_in.empty or col_fecha not in df_in.columns:
                 return df_in
             if periodo_filtro == "Histórico General":
@@ -959,7 +965,8 @@ else:
             ahora = pd.Timestamp.now()
             
             if periodo_filtro == "Diario":
-                df_copia = df_copia[df_copia["_dt"].dt.date == ahora.date()]
+                target_fecha = ahora.date()
+                df_copia = df_copia[df_copia["_dt"].dt.date == target_fecha]
             elif periodo_filtro == "Semanal":
                 inicio_semana = (ahora - pd.Timedelta(days=ahora.dayofweek)).normalize()
                 fin_semana = inicio_semana + pd.Timedelta(days=6, hours=23, minutes=59, seconds=59)
@@ -990,7 +997,7 @@ else:
                     if not d.empty:
                         d.columns = d.columns.str.lower()
 
-                # Ingresos en efectivo
+                # Ingresos en efectivo o nequi
                 ingresos_efectivo = 0
                 if not df_v.empty and "forma de pago" in df_v.columns and "cantidad" in df_v.columns and "precio" in df_v.columns:
                     df_v["cantidad"] = pd.to_numeric(df_v["cantidad"], errors="coerce").fillna(0)
@@ -998,7 +1005,7 @@ else:
                     mask_efectivo = df_v["forma de pago"].astype(str).str.lower().str.contains("efectivo|nequi|Nequi", na=False)
                     ingresos_efectivo = (df_v.loc[mask_efectivo, "cantidad"] * df_v.loc[mask_efectivo, "precio"]).sum()
 
-                # Compras pagadas en efectivo
+                # Compras pagadas en efectivo o nequi
                 compras_efectivo = 0
                 if not df_c.empty and "forma de pago" in df_c.columns and "cantidad" in df_c.columns and "precio" in df_c.columns:
                     df_c["cantidad"] = pd.to_numeric(df_c["cantidad"], errors="coerce").fillna(0)
@@ -1006,7 +1013,7 @@ else:
                     mask_efectivo_c = df_c["forma de pago"].astype(str).str.lower().str.contains("efectivo|nequi|Nequi", na=False)
                     compras_efectivo = (df_c.loc[mask_efectivo_c, "cantidad"] * df_c.loc[mask_efectivo_c, "precio"]).sum()
 
-                # Gastos pagados en efectivo
+                # Gastos pagados en efectivo o nequi
                 gastos_efectivo = 0
                 if not df_g.empty and "forma de pago" in df_g.columns and "precio" in df_g.columns:
                     df_g["precio"] = pd.to_numeric(df_g["precio"], errors="coerce").fillna(0)
@@ -1017,9 +1024,9 @@ else:
 
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.metric("(+) Ingresos en Efectivo", f"${ingresos_efectivo:,.2f}")
-                    st.metric("(-) Compras en Efectivo", f"${compras_efectivo:,.2f}")
-                    st.metric("(-) Gastos en Efectivo", f"${gastos_efectivo:,.2f}")
+                    st.metric("(+) Ingresos en Efectivo / Nequi", f"${ingresos_efectivo:,.2f}")
+                    st.metric("(-) Compras en Efectivo / Nequi", f"${compras_efectivo:,.2f}")
+                    st.metric("(-) Gastos en Efectivo / Nequi", f"${gastos_efectivo:,.2f}")
                 with col2:
                     st.metric("💰 Total Neto en Caja", f"${total_caja:,.2f}")
 
@@ -1031,7 +1038,7 @@ else:
                 st.markdown("Valores que los clientes deben al negocio por ventas realizadas a crédito.")
 
                 res_abonos = supabase.table("abonos").select("*").range(0, 9999).execute()
-                df_abonos = pd.DataFrame(res_abonos.data)
+                df_abonos = filtrar_por_periodo(pd.DataFrame(res_abonos.data))
 
                 if not df_abonos.empty:
                     df_abonos.columns = df_abonos.columns.str.lower()
@@ -1046,7 +1053,7 @@ else:
                     else:
                         st.dataframe(df_abonos, use_container_width=True)
                 else:
-                    st.info("No hay registros de cuentas por cobrar o abonos pendientes.")
+                    st.info("No hay registros de cuentas por cobrar o abonos pendientes para este periodo.")
 
             # -----------------------------------------------------------------
             # 3. CUENTAS POR PAGAR
@@ -1056,7 +1063,7 @@ else:
                 st.markdown("Deudas pendientes con proveedores o servicios recibidos.")
 
                 res_prov = supabase.table("pagos_proveedores").select("*").range(0, 9999).execute()
-                df_prov = pd.DataFrame(res_prov.data)
+                df_prov = filtrar_por_periodo(pd.DataFrame(res_prov.data))
 
                 if not df_prov.empty:
                     df_prov.columns = df_prov.columns.str.lower()
@@ -1071,7 +1078,7 @@ else:
                     else:
                         st.dataframe(df_prov, use_container_width=True)
                 else:
-                    st.info("No hay registros de cuentas por pagar a proveedores.")
+                    st.info("No hay registros de cuentas por pagar a proveedores para este periodo.")
 
             # -----------------------------------------------------------------
             # 4. ESTADO DE RESULTADO
