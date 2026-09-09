@@ -9,7 +9,7 @@ supabase = supabase_config()
 groq_client = Groq(api_key=st.secrets["groq"]["API_KEY"], max_retries=2)
 
 st.set_page_config(
-    page_title="GICI - Registro Financiero por Voz", page_icon="🎙️", layout="centered"
+    page_title="CIGI - Registro Financiero por Voz", page_icon="🎙️", layout="centered"
 )
 
 # Ventana emergente global optimizada para soportar cualquier tabla del sistema
