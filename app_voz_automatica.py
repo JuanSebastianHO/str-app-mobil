@@ -98,206 +98,215 @@ if st.session_state.seccion_actual == "Inicio":
             with open(audio_filename, "wb") as f:
                 f.write(audio_bytes)
 
-            with open(audio_filename, "rb") as file:
-                transcription = groq_client.audio.transcriptions.create(
-                    file=(audio_filename, file.read()),
-                    model="whisper-large-v3-turbo",
-                    language="es",
-                    response_format="text",
-                )
+            try:
+                with open(audio_filename, "rb") as file:
+                    transcription = groq_client.audio.transcriptions.create(
+                        file=(audio_filename, file.read()),
+                        model="whisper-large-v3-turbo",
+                        language="es",
+                        response_format="text",
+                    )
+            except Exception as e:
+                st.error("⚠️ No se pudo procesar el audio. Intente nuevamente.")
+                transcription = ""
 
-        st.success(f"**Texto reconocido:** \"{transcription}\"")
+        if transcription:
+            st.success(f"**Texto reconocido:** \"{transcription}\"")
 
-        with st.spinner("🤖 Analizando transacción con Llama..."):
-            prompt_sistema = """
-            Eres un asistente financiero y de inventarios inteligente. Tu tarea es analizar la intención del usuario y responder en un JSON estricto. Si el usuario realiza varias solicitudes en el mismo audio, devuelve una lista de objetos JSON `[...]`. Cualquier otra intención será rechazada.
+            with st.spinner("🤖 Analizando transacción con Llama..."):
+                prompt_sistema = """
+                Eres un asistente financiero y de inventarios inteligente. Tu tarea es analizar la intención del usuario y responder en un JSON estricto. Si el usuario realiza varias solicitudes en el mismo audio, devuelve una lista de objetos JSON `[...]`. Cualquier otra intención será rechazada.
 
-            REGLA CRÍTICA: En las acciones "REGISTRAR", "MODIFICAR" y "ELIMINAR", el usuario DEBE mencionar explícitamente la tabla. Si no la menciona, asigna "tabla": null.
+                REGLA CRÍTICA: En las acciones "REGISTRAR", "MODIFICAR" y "ELIMINAR", el usuario DEBE mencionar explícitamente la tabla. Si no la menciona, asigna "tabla": null.
 
-            Identifica la intención:
+                Identifica la intención:
 
-            1. Si el usuario quiere REGISTRAR una nueva transacción:
-                - Si la tabla es "ventas" o "compras":
-                    {
+                1. Si el usuario quiere REGISTRAR una nueva transacción:
+                    - Si la tabla es "ventas" o "compras":
+                        {
+                            "accion": "REGISTRAR",
+                            "tabla": "ventas" | "compras",
+                            "nombre": "nombre del producto",
+                            "cantidad": número entero,
+                            "precio": número o valor decimal,
+                            "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta",
+                            "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null
+                        }
+                    
+                    - Si la tabla es "gastos":
+                        {
+                            "accion": "REGISTRAR",
+                            "tabla": "gastos",
+                            "descripcion": "detalle del gasto",
+                            "precio": número o valor decimal,
+                            "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta",
+                            "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null
+                        }
+
+                    - Si la tabla es "productos" (Inventario manual o inicial sin factura):
+                        {
+                            "accion": "REGISTRAR",
+                            "tabla": "productos",
+                            "nombre": "nombre del producto",
+                            "stock_actual": número entero,
+                            "stock_minimo": número entero,
+                            "precio_venta": número o valor decimal,
+                            "fecha_vencimiento": "YYYY-MM-DD" | null
+                        }
+                    
+                    - Si la tabla es "abonos":
+                     {
                         "accion": "REGISTRAR",
-                        "tabla": "ventas" | "compras",
-                        "nombre": "nombre del producto",
-                        "cantidad": número entero,
-                        "precio": número o valor decimal,
+                        "tabla": "abonos",
+                        "nombre": "nombre del cliente",
+                        "apellido": "nombre del cliente",
+                        "documento": "documento de identidad del cliente en texto",
+                        "monto": número o valor decimal,
                         "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta",
-                        "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null
-                    }
-                
-                - Si la tabla es "gastos":
-                    {
+                        "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null,
+                        "descripcion": "detalle del abono o null"
+                     }
+                     
+                    - Si la tabla es "pagos_proveedores":
+                     {
                         "accion": "REGISTRAR",
+                        "tabla": "pagos_proveedores",
+                        "nombre": "nombre de la persona o contacto",
+                        "empresa": "nombre de la compañía o proveedor o null",
+                        "documento": "cédula o NIT del proveedor en texto",
+                        "monto": número o valor decimal,
+                        "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta",
+                        "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null,
+                        "descripcion": "detalle o número de factura o null"
+                     }
+
+                2. Si el usuario quiere CONSULTAR información:
+                   {
+                      "accion": "CONSULTAR",
+                      "tabla": "ventas" | "compras" | "gastos" | "costos" | "abonos" | "pagos_proveedores" | "productos",
+                      "metrica": "total" | "conteo",
+                      "filtro_metodo": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta" | null,
+                      "periodo": "diario" | "semanal" | "mensual" | null,
+                      "mes": número entero (1-12) o null,
+                      "anio": número entero (ej: 2025, 2026) o null
+                   }
+                
+                3. Si el usuario quiere MODIFICAR, ACTUALIZAR o COMPLETAR un dato existente:
+                   - Si la tabla es "ventas" o "compras" o "productos":
+                    {
+                        "accion": "MODIFICAR",
+                        "tabla": "ventas" | "compras" | "productos",
+                        "criterio_busqueda": {
+                            "nombre": "nombre del producto o null",
+                            "codigo": "codigo"
+                        },
+                        "datos_a_actualizar": {
+                            "nombre": "nuevo nombre del producto o null",
+                            "cantidad": número entero o null,
+                            "stock_actual": número entero o null,
+                            "stock_minimo": número entero o null,
+                            "precio": número o valor decimal o null,
+                            "precio_venta": número o valor decimal o null,
+                            "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta" | null,
+                            "fecha_vencimiento": "YYYY-MM-DD" | null,
+                            "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null
+                        }
+                    }
+
+                    - Si la tabla es "gastos":
+                    {
+                        "accion": "MODIFICAR",
                         "tabla": "gastos",
-                        "descripcion": "detalle del gasto",
-                        "precio": número o valor decimal,
-                        "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta",
-                        "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null
+                        "criterio_busqueda": {
+                            "descripcion": "detalle del gasto",
+                            "fecha": "YYYY-MM-DD HH:mm:ss+ZZ o null"
+                        },
+                        "datos_a_actualizar": {
+                            "descripcion": "nueva descripción del gasto o null",
+                            "precio": número o valor decimal o null,
+                            "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta" | null,
+                            "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null
+                        }
                     }
 
-                - Si la tabla es "productos" (Inventario manual o inicial sin factura):
+                    - Si la tabla es "abonos":
                     {
-                        "accion": "REGISTRAR",
-                        "tabla": "productos",
-                        "nombre": "nombre del producto",
-                        "stock_actual": número entero,
-                        "stock_minimo": número entero,
-                        "precio_venta": número o valor decimal,
-                        "fecha_vencimiento": "YYYY-MM-DD" | null
+                        "accion": "MODIFICAR",
+                        "tabla": "abonos",
+                        "criterio_busqueda": {
+                            "documento": "documento de identidad del cliente o null",
+                            "id": "uuid del abono o null"
+                        },
+                        "datos_a_actualizar": {
+                            "nombre": "nuevo nombre del cliente o null",
+                            "apellido": "nuevo apellido del cliente o null",
+                            "documento": "nuevo documento de identidad o null",
+                            "monto": número o valor decimal o null,
+                            "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta" | null,
+                            "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null,
+                            "descripcion": "nuevo detalle del abono o null"
+                        }
                     }
-                
-                - Si la tabla es "abonos":
-                 {
-                    "accion": "REGISTRAR",
-                    "tabla": "abonos",
-                    "nombre": "nombre del cliente",
-                    "apellido": "nombre del cliente",
-                    "documento": "documento de identidad del cliente en texto",
-                    "monto": número o valor decimal,
-                    "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta",
-                    "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null,
-                    "descripcion": "detalle del abono o null"
-                 }
-                 
-                - Si la tabla es "pagos_proveedores":
-                 {
-                    "accion": "REGISTRAR",
-                    "tabla": "pagos_proveedores",
-                    "nombre": "nombre de la persona o contacto",
-                    "empresa": "nombre de la compañía o proveedor o null",
-                    "documento": "cédula o NIT del proveedor en texto",
-                    "monto": número o valor decimal,
-                    "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta",
-                    "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null,
-                    "descripcion": "detalle o número de factura o null"
-                 }
 
-            2. Si el usuario quiere CONSULTAR información:
-               {
-                  "accion": "CONSULTAR",
-                  "tabla": "ventas" | "compras" | "gastos" | "costos" | "abonos" | "pagos_proveedores" | "productos",
-                  "metrica": "total" | "conteo",
-                  "filtro_metodo": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta" | null,
-                  "periodo": "diario" | "semanal" | "mensual" | null,
-                  "mes": número entero (1-12) o null,
-                  "anio": número entero (ej: 2025, 2026) o null
-               }
-            
-            3. Si el usuario quiere MODIFICAR, ACTUALIZAR o COMPLETAR un dato existente:
-               - Si la tabla es "ventas" o "compras" o "productos":
-                {
-                    "accion": "MODIFICAR",
-                    "tabla": "ventas" | "compras" | "productos",
-                    "criterio_busqueda": {
-                        "nombre": "nombre del producto o null",
-                        "codigo": codigo
-                    },
-                    "datos_a_actualizar": {
-                        "nombre": "nuevo nombre del producto o null",
-                        "cantidad": número entero o null,
-                        "stock_actual": número entero o null,
-                        "stock_minimo": número entero o null,
-                        "precio": número o valor decimal o null,
-                        "precio_venta": número o valor decimal o null,
-                        "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta" | null,
-                        "fecha_vencimiento": "YYYY-MM-DD" | null,
-                        "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null
+                    - Si la tabla es "pagos_proveedores":
+                    {
+                        "accion": "MODIFICAR",
+                        "tabla": "pagos_proveedores",
+                        "criterio_busqueda": {
+                            "documento": "cédula o NIT del proveedor o null",
+                            "id": "uuid del pago o null"
+                        },
+                        "datos_a_actualizar": {
+                            "nombre": "nuevo nombre de la persona o contacto o null",
+                            "empresa": "nuevo nombre de la compañía o proveedor o null",
+                            "documento": "nueva cédula o NIT o null",
+                            "monto": número o valor decimal o null,
+                            "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta" | null,
+                            "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null,
+                            "descripcion": "nuevo detalle o número de factura o null"
+                        }
                     }
-                }
 
-                - Si la tabla es "gastos":
-                {
-                    "accion": "MODIFICAR",
-                    "tabla": "gastos",
-                    "criterio_busqueda": {
-                        "descripcion": "detalle del gasto",
-                        "fecha": "YYYY-MM-DD HH:mm:ss+ZZ o null"
-                    },
-                    "datos_a_actualizar": {
-                        "descripcion": "nueva descripción del gasto o null",
-                        "precio": número o valor decimal o null,
-                        "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta" | null,
-                        "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null
-                    }
-                }
+                4. Si el usuario quiere ELIMINAR o BORRAR un registro existente:
+                   {
+                      "accion": "ELIMINAR",
+                      "tabla": "ventas" | "abonos" | "gastos" | "compras" | "pagos_proveedores" | "productos",
+                      "criterio_busqueda": {
+                          "nombre": "nombre del producto o null",
+                          "codigo": numero de codigo
+                      }
+                   }
 
-                - Si la tabla es "abonos":
-                {
-                    "accion": "MODIFICAR",
-                    "tabla": "abonos",
-                    "criterio_busqueda": {
-                        "documento": "documento de identidad del cliente o null",
-                        "id": "uuid del abono o null"
-                    },
-                    "datos_a_actualizar": {
-                        "nombre": "nuevo nombre del cliente o null",
-                        "apellido": "nuevo apellido del cliente o null",
-                        "documento": "nuevo documento de identidad o null",
-                        "monto": número o valor decimal o null,
-                        "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta" | null,
-                        "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null,
-                        "descripcion": "nuevo detalle del abono o null"
-                    }
-                }
+                No devuelvas texto adicional, solo el JSON estructurado (objeto o lista).
+                """
 
-                - Si la tabla es "pagos_proveedores":
-                {
-                    "accion": "MODIFICAR",
-                    "tabla": "pagos_proveedores",
-                    "criterio_busqueda": {
-                        "documento": "cédula o NIT del proveedor o null",
-                        "id": "uuid del pago o null"
-                    },
-                    "datos_a_actualizar": {
-                        "nombre": "nuevo nombre de la persona o contacto o null",
-                        "empresa": "nuevo nombre de la compañía o proveedor o null",
-                        "documento": "nueva cédula o NIT o null",
-                        "monto": número o valor decimal o null,
-                        "forma de pago": "efectivo" | "nequi" | "crédito" | "transferencia" | "tarjeta" | null,
-                        "fecha": "YYYY-MM-DD HH:mm:ss+ZZ" | null,
-                        "descripcion": "nuevo detalle o número de factura o null"
-                    }
-                }
+                try:
+                    chat_completion = groq_client.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": prompt_sistema},
+                            {"role": "user", "content": transcription},
+                        ],
+                        model="openai/gpt-oss-120b",
+                        response_format={"type": "json_object"},
+                        temperature=0.0,
+                    )
+                    contenido_crudo = chat_completion.choices[0].message.content
+                    resultado_cargado = json.loads(contenido_crudo)
+                except Exception:
+                    st.error("⚠️ No se pudo interpretar la solicitud correctamente. Intente nuevamente.")
+                    resultado_cargado = None
 
-            4. Si el usuario quiere ELIMINAR o BORRAR un registro existente:
-               {
-                  "accion": "ELIMINAR",
-                  "tabla": "ventas" | "abonos" | "gastos" | "compras" | "pagos_proveedores" | "productos",
-                  "criterio_busqueda": {
-                      "nombre": "nombre del producto o null"
-                      "codigo": numero de codigo
-                  }
-               }
+            if resultado_cargado:
+                if isinstance(resultado_cargado, dict) and "acciones" in resultado_cargado:
+                    resultado_json = resultado_cargado["acciones"]
+                else:
+                    resultado_json = resultado_cargado
 
-            No devuelvas texto adicional, solo el JSON estructurado (objeto o lista).
-            """
+                st.session_state.resultado_activo = resultado_json
+                st.session_state.audio_key += 1
+                st.rerun()
 
-            chat_completion = groq_client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": prompt_sistema},
-                    {"role": "user", "content": transcription},
-                ],
-                model="openai/gpt-oss-120b",
-                response_format={"type": "json_object"},
-                temperature=0.0,
-            )
-
-        contenido_crudo = chat_completion.choices[0].message.content
-        resultado_cargado = json.loads(contenido_crudo)
-
-        if isinstance(resultado_cargado, dict) and "acciones" in resultado_cargado:
-            resultado_json = resultado_cargado["acciones"]
-        else:
-            resultado_json = resultado_cargado
-
-        st.session_state.resultado_activo = resultado_json
-        st.session_state.audio_key += 1
-        st.rerun()
-
-    # Procesar y mostrar acciones pendientes si las hay en el Home
+    # Procesar y mostrar acciones pendientes con prellenado automático y selectboxes restrictivos
     if st.session_state.resultado_activo:
         resultados = st.session_state.resultado_activo
         if not isinstance(resultados, list):
@@ -309,14 +318,113 @@ if st.session_state.seccion_actual == "Inicio":
                 st.session_state.resultado_activo = None
                 modal_consulta_global(tabla_consulta)
 
-        for i, resultado_json in enumerate(resultados):
-            st.markdown(f"--- \n### 🔄 Acción {i + 1}")
-            st.json(resultado_json)
+        st.markdown("---")
+        st.markdown("### ✍️ Confirma y edita la información entendida:")
+        st.markdown("Revisa los datos extraídos de tu voz. Puedes corregir cualquier campo antes de ejecutar la acción.")
 
-        tiene_escrituras = any(r.get("accion") in ["REGISTRAR", "MODIFICAR", "ELIMINAR"] for r in resultados)
-        if tiene_escrituras:
+        opciones_acciones = ["REGISTRAR", "CONSULTAR", "MODIFICAR", "ELIMINAR"]
+        opciones_tablas = ["ventas", "compras", "gastos", "productos", "abonos", "pagos_proveedores", "costos"]
+        opciones_formas_pago = ["efectivo", "nequi", "crédito", "transferencia", "tarjeta"]
+
+        resultados_editados = []
+        for i, resultado_json in enumerate(resultados):
+            st.markdown(f"#### Acción {i + 1}")
+            with st.container(border=True):
+                campos_actualizados = resultado_json.copy()
+                
+                for k, v in list(resultado_json.items()):
+                    k_lower = k.lower()
+                    if isinstance(v, dict):
+                        st.markdown(f"**{k.replace('_', ' ').capitalize()}**")
+                        sub_dict = {}
+                        for sub_k, sub_v in v.items():
+                            sub_k_lower = sub_k.lower()
+                            if sub_k_lower == "forma de pago":
+                                indice_actual = 0
+                                if sub_v in opciones_formas_pago:
+                                    indice_actual = opciones_formas_pago.index(sub_v)
+                                nuevo_sub_v = st.selectbox(
+                                    f"{sub_k.replace('_', ' ').capitalize()}",
+                                    options=opciones_formas_pago,
+                                    index=indice_actual,
+                                    key=f"field_{st.session_state.audio_key}_{i}_{k}_{sub_k}"
+                                )
+                                sub_dict[sub_k] = nuevo_sub_v
+                            else:
+                                nuevo_sub_v = st.text_input(
+                                    f"{sub_k.replace('_', ' ').capitalize()}",
+                                    value="" if sub_v is None else str(sub_v),
+                                    key=f"field_{st.session_state.audio_key}_{i}_{k}_{sub_k}"
+                                )
+                                if nuevo_sub_v == "":
+                                    sub_dict[sub_k] = None
+                                else:
+                                    try:
+                                        if "." in nuevo_sub_v:
+                                            sub_dict[sub_k] = float(nuevo_sub_v)
+                                        else:
+                                            sub_dict[sub_k] = int(nuevo_sub_v)
+                                    except ValueError:
+                                        sub_dict[sub_k] = nuevo_sub_v
+                        campos_actualizados[k] = sub_dict
+                    else:
+                        if k_lower == "accion":
+                            indice_actual = 0
+                            if v in opciones_acciones:
+                                indice_actual = opciones_acciones.index(v)
+                            campos_actualizados[k] = st.selectbox(
+                                f"{k.replace('_', ' ').capitalize()}",
+                                options=opciones_acciones,
+                                index=indice_actual,
+                                key=f"field_{st.session_state.audio_key}_{i}_{k}"
+                            )
+                        elif k_lower == "tabla":
+                            indice_actual = 0
+                            if v in opciones_tablas:
+                                indice_actual = opciones_tablas.index(v)
+                            campos_actualizados[k] = st.selectbox(
+                                f"{k.replace('_', ' ').capitalize()}",
+                                options=opciones_tablas,
+                                index=indice_actual,
+                                key=f"field_{st.session_state.audio_key}_{i}_{k}"
+                            )
+                        elif k_lower == "forma de pago":
+                            indice_actual = 0
+                            if v in opciones_formas_pago:
+                                indice_actual = opciones_formas_pago.index(v)
+                            campos_actualizados[k] = st.selectbox(
+                                f"{k.replace('_', ' ').capitalize()}",
+                                options=opciones_formas_pago,
+                                index=indice_actual,
+                                key=f"field_{st.session_state.audio_key}_{i}_{k}"
+                            )
+                        else:
+                            nuevo_v = st.text_input(
+                                f"{k.replace('_', ' ').capitalize()}",
+                                value="" if v is None else str(v),
+                                key=f"field_{st.session_state.audio_key}_{i}_{k}"
+                            )
+                            if nuevo_v == "":
+                                campos_actualizados[k] = None
+                            else:
+                                try:
+                                    if "." in nuevo_v:
+                                        campos_actualizados[k] = float(nuevo_v)
+                                    else:
+                                        campos_actualizados[k] = int(nuevo_v)
+                                except ValueError:
+                                    campos_actualizados[k] = nuevo_v
+                
+                resultados_editados.append(campos_actualizados)
+
+        tiene_escrituras = any(
+            r and r.get("accion") in ["REGISTRAR", "MODIFICAR", "ELIMINAR"] 
+            for r in resultados_editados
+        )
+        
+        if tiene_escrituras and all(r is not None for r in resultados_editados):
             if st.button("🚀 Ejecutar Acción(es)", type="primary"):
-                for i, resultado_json in enumerate(resultados):
+                for i, resultado_json in enumerate(resultados_editados):
                     accion = resultado_json.get("accion")
                     tabla = resultado_json.get("tabla")
                     if not tabla:
@@ -474,6 +582,8 @@ if st.session_state.seccion_actual == "Inicio":
                                 st.warning(f"No se encontró coincidencia para eliminar en la acción {i+1}.")
                         except Exception as e:
                             st.error(f"Error al eliminar registro {i+1}: {e}")
+
+                st.session_state.resultado_activo = None
 
     st.markdown("---")
     st.markdown("### Menú Principal")
@@ -977,9 +1087,6 @@ else:
             return df_copia.drop(columns=["_dt", "_fecha_limpia"], errors="ignore")
 
         try:
-            # -----------------------------------------------------------------
-            # 1. FLUJO DE CAJA
-            # -----------------------------------------------------------------
             if tipo_reporte_gerencial == "Flujo de Caja":
                 st.subheader("💵 Reporte de Flujo de Caja")
                 st.markdown("Muestra el dinero efectivo que entra y sale del negocio.")
@@ -992,12 +1099,10 @@ else:
                 df_c = filtrar_por_periodo(pd.DataFrame(res_c.data))
                 df_g = filtrar_por_periodo(pd.DataFrame(res_g.data))
 
-                # Normalizar nombres de columnas a minúsculas
                 for d in [df_v, df_c, df_g]:
                     if not d.empty:
                         d.columns = d.columns.str.lower()
 
-                # Ingresos en efectivo o nequi
                 ingresos_efectivo = 0
                 if not df_v.empty and "forma de pago" in df_v.columns and "cantidad" in df_v.columns and "precio" in df_v.columns:
                     df_v["cantidad"] = pd.to_numeric(df_v["cantidad"], errors="coerce").fillna(0)
@@ -1005,7 +1110,6 @@ else:
                     mask_efectivo = df_v["forma de pago"].astype(str).str.lower().str.contains("efectivo|nequi|Nequi", na=False)
                     ingresos_efectivo = (df_v.loc[mask_efectivo, "cantidad"] * df_v.loc[mask_efectivo, "precio"]).sum()
 
-                # Compras pagadas en efectivo o nequi
                 compras_efectivo = 0
                 if not df_c.empty and "forma de pago" in df_c.columns and "cantidad" in df_c.columns and "precio" in df_c.columns:
                     df_c["cantidad"] = pd.to_numeric(df_c["cantidad"], errors="coerce").fillna(0)
@@ -1013,7 +1117,6 @@ else:
                     mask_efectivo_c = df_c["forma de pago"].astype(str).str.lower().str.contains("efectivo|nequi|Nequi", na=False)
                     compras_efectivo = (df_c.loc[mask_efectivo_c, "cantidad"] * df_c.loc[mask_efectivo_c, "precio"]).sum()
 
-                # Gastos pagados en efectivo o nequi
                 gastos_efectivo = 0
                 if not df_g.empty and "forma de pago" in df_g.columns and "precio" in df_g.columns:
                     df_g["precio"] = pd.to_numeric(df_g["precio"], errors="coerce").fillna(0)
@@ -1030,9 +1133,6 @@ else:
                 with col2:
                     st.metric("💰 Total Neto en Caja", f"${total_caja:,.2f}")
 
-            # -----------------------------------------------------------------
-            # 2. CUENTAS POR COBRAR
-            # -----------------------------------------------------------------
             elif tipo_reporte_gerencial == "Reporte de Cuentas por Cobrar":
                 st.subheader("📋 Reporte de Cuentas por Cobrar")
                 st.markdown("Valores que los clientes deben al negocio por ventas realizadas a crédito.")
@@ -1055,9 +1155,6 @@ else:
                 else:
                     st.info("No hay registros de cuentas por cobrar o abonos pendientes para este periodo.")
 
-            # -----------------------------------------------------------------
-            # 3. CUENTAS POR PAGAR
-            # -----------------------------------------------------------------
             elif tipo_reporte_gerencial == "Reporte de Cuentas por Pagar":
                 st.subheader("📑 Reporte de Cuentas por Pagar")
                 st.markdown("Deudas pendientes con proveedores o servicios recibidos.")
@@ -1080,9 +1177,6 @@ else:
                 else:
                     st.info("No hay registros de cuentas por pagar a proveedores para este periodo.")
 
-            # -----------------------------------------------------------------
-            # 4. ESTADO DE RESULTADO
-            # -----------------------------------------------------------------
             elif tipo_reporte_gerencial == "Estado de Resultado":
                 st.subheader("📈 Estado de Resultados (Utilidad o Pérdida)")
                 st.markdown("Resumen de ingresos totales, costos y gastos del periodo seleccionado.")
@@ -1099,21 +1193,18 @@ else:
                     if not d.empty:
                         d.columns = d.columns.str.lower()
 
-                # Total Ingresos
                 total_ingresos = 0
                 if not df_v.empty and "cantidad" in df_v.columns and "precio" in df_v.columns:
                     df_v["cantidad"] = pd.to_numeric(df_v["cantidad"], errors="coerce").fillna(0)
                     df_v["precio"] = pd.to_numeric(df_v["precio"], errors="coerce").fillna(0)
                     total_ingresos = (df_v["cantidad"] * df_v["precio"]).sum()
 
-                # Total Costos (Basado en las compras totales de mercancía)
                 total_costos = 0
                 if not df_c.empty and "cantidad" in df_c.columns and "precio" in df_c.columns:
                     df_c["cantidad"] = pd.to_numeric(df_c["cantidad"], errors="coerce").fillna(0)
                     df_c["precio"] = pd.to_numeric(df_c["precio"], errors="coerce").fillna(0)
                     total_costos = (df_c["cantidad"] * df_c["precio"]).sum()
 
-                # Total Gastos
                 total_gastos = 0
                 if not df_g.empty and "precio" in df_g.columns:
                     df_g["precio"] = pd.to_numeric(df_g["precio"], errors="coerce").fillna(0)
