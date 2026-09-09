@@ -81,7 +81,7 @@ if st.session_state.seccion_actual == "Inicio":
     with col_logo:
         st.image("logo.png", width=110)
     with col_titulo:
-        st.markdown("<h1 style='margin: 0;'>GICI</h1>", unsafe_allow_html=True)
+        st.markdown("<h1 style='margin: 0;'>CIGI</h1>", unsafe_allow_html=True)
         st.markdown("<p style='font-size: 18px; color: #888; margin: 0;'>Registro Financiero por Voz</p>", unsafe_allow_html=True)
 
     st.markdown("<p style='text-align: center; margin-top: 20px;'>Toca el micrófono para registrar o consultar tus finanzas.</p>", unsafe_allow_html=True)
